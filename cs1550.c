@@ -80,6 +80,8 @@ static int cs1550_getattr(const char *path, struct stat *stbuf)
 	char directory[9];
 	char filename[9];
 	char extension[4];
+	char directPath[20];
+	strcpy(directPath, "/");
 
 	memset(stbuf, 0, sizeof(struct stat));
    
@@ -94,13 +96,15 @@ static int cs1550_getattr(const char *path, struct stat *stbuf)
 	
 		res = sscanf(path, "/%[^/]/%[^.].%s", directory, filename, extension);
 		
+		strcat(directPath, directory);
+		
 		if(res == EOF) // Some error occurred when scanning path
 			return -ENOENT;
 		else;
 		
 		//Check if name is subdirectory
 		//All files should have extensions, if one is lacking then this is a directory
-		if(1) // Using for test of directory stuff, should change later
+		if(strcmp(path, directPath) == 0) // If only the root and directory are given then this must be a directory
 		{
 				cs1550_directory_entry *entry = malloc(sizeof(cs1550_directory_entry));
 				FILE *f = fopen(".directories", "rb");
