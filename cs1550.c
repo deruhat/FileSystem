@@ -116,7 +116,7 @@ static int cs1550_getattr(const char *path, struct stat *stbuf)
 				}
 				else
 				{
-					while( directoryFound < 1 && fread(entry, sizeof(cs1550_directory_entry), 1, f) != 0)
+					while( directoryFound < 1 && fread(entry, sizeof(cs1550_directory_entry), 1, f) > 0)
 					{
 						if(strcmp(entry->dname, directory) == 0)
 							directoryFound = 1;
@@ -175,9 +175,10 @@ static int cs1550_getattr(const char *path, struct stat *stbuf)
 			while(i < entry->nFiles && found < 1)
 			{
 				*dirFile = *(entry->files + i);
-				if(strcmp(dirFile->fname, filename) == 0)// && strcmp(dirFile->fext, extension) == 0)
+				if(strcmp(dirFile->fname, filename) == 0 && strcmp(dirFile->fext, extension) == 0)
 					found = 1;
 				else;
+				i++;
 			}
 			
 			if(found < 1) // file doesn't exist
@@ -264,14 +265,14 @@ static int cs1550_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 		{
 			struct cs1550_file_directory *dirFile = malloc(sizeof(struct cs1550_file_directory));
 			int i = 0;
+			char fileName[20];
 			while(i < entry->nFiles)
 			{
-				char fileName[12];
 				*dirFile = *(entry->files + i);
 				strcpy(fileName, dirFile->fname);
-				//strcat(fileName, ".");
-				//strcat(fileName, dirFile->fext);
-				filler(buf, fileName + 1, NULL, 0);
+				strcat(fileName, ".");
+				strcat(fileName, dirFile->fext);
+				filler(buf, fileName, NULL, 0);
 				i++;
 			}
 			free(dirFile);
