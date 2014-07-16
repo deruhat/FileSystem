@@ -116,7 +116,7 @@ static int cs1550_getattr(const char *path, struct stat *stbuf)
 				}
 				else
 				{
-					while(fread(entry, sizeof(cs1550_directory_entry), 1, f) != 0 && directoryFound < 1)
+					while( directoryFound < 1 && fread(entry, sizeof(cs1550_directory_entry), 1, f) != 0)
 					{
 						if(strcmp(entry->dname, directory) == 0)
 							directoryFound = 1;
@@ -140,14 +140,60 @@ static int cs1550_getattr(const char *path, struct stat *stbuf)
 		}
 		//Check if name is a regular file
 		//Since an extension is present this must be a file
-		else
+		else // Not yet working to detect if given file exists, will work on
 		{
+			
+			FILE *f = fopen(".directories", "rb");
+			cs1550_directory_entry *entry = malloc(sizeof(cs1550_directory_entry));
+			struct cs1550_file_directory *dirFile = malloc(sizeof(struct cs1550_file_directory));
+			int found = 0;
+			int i = 0;
+			if(f == NULL)
+			{
+				free(dirFile);
+				free(entry);
 				return -ENOENT;
-				//regular file, probably want to be read and write
-				stbuf->st_mode = S_IFREG | 0666; 
-				stbuf->st_nlink = 1; //file links
-				stbuf->st_size = 0; //file size - make sure you replace with real size!
-				res = 0; // no error
+			}
+			else;
+			
+			while(found < 1 && fread(entry, sizeof(cs1550_directory_entry), 1, f) > 0)
+			{
+				if(strcmp(entry->dname, directory) == 0)
+					found = 1;
+				else;
+			}
+			if(found < 1) // directory doesn't exist
+			{
+				free(dirFile);
+				free(entry);
+				fclose(f);
+				return -ENOENT;
+			}
+			else;
+			
+			found = 0;
+			while(i < entry->nFiles && found < 1)
+			{
+				*dirFile = *(entry->files + i);
+				if(strcmp(dirFile->fname, filename) == 0)// && strcmp(dirFile->fext, extension) == 0)
+					found = 1;
+				else;
+			}
+			
+			if(found < 1) // file doesn't exist
+			{
+				free(dirFile);
+				free(entry);
+				fclose(f);
+				return -ENOENT;
+			}
+			else;
+			
+			//regular file, probably want to be read and write
+			stbuf->st_mode = S_IFREG | 0666; 
+			stbuf->st_nlink = 1; //file links
+			stbuf->st_size = 0; //file size - make sure you replace with real size!
+			res = 0; // no error
 			
 		}
 		
@@ -202,14 +248,18 @@ static int cs1550_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 		FILE *f = fopen(".directories", "rb");
 		int directoryFound = 0;
 		cs1550_directory_entry *entry = malloc(sizeof(cs1550_directory_entry));
-		while(fread(entry, sizeof(cs1550_directory_entry), 1, f) != 0 && directoryFound < 1)
+		while(directoryFound < 1 && fread(entry, sizeof(cs1550_directory_entry), 1, f) != 0)
 		{	
 			if(strcmp(entry->dname, directory) == 0)
 				directoryFound = 1;
 			else;
 		}
 		if(directoryFound < 1) // If we never found a subdirectory matching the one given return error
+		{
+			fclose(f);
+			free(entry);
 			return -ENOENT;
+		}
 		else
 		{
 			struct cs1550_file_directory *dirFile = malloc(sizeof(struct cs1550_file_directory));
@@ -219,9 +269,9 @@ static int cs1550_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 				char fileName[12];
 				*dirFile = *(entry->files + i);
 				strcpy(fileName, dirFile->fname);
-				strcat(fileName, ".");
-				strcat(fileName, dirFile->fext);
-				filler(buf, fileName, NULL, 0);
+				//strcat(fileName, ".");
+				//strcat(fileName, dirFile->fext);
+				filler(buf, fileName + 1, NULL, 0);
 				i++;
 			}
 			free(dirFile);
