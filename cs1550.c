@@ -77,11 +77,10 @@ typedef struct cs1550_disk_block cs1550_disk_block;
 static int cs1550_getattr(const char *path, struct stat *stbuf)
 {
 	int res = 0;
-	char directory[9];
-	char filename[9];
-	char extension[4];
-	char directPath[20];
-	strcpy(directPath, "/");
+	int len = strlen(path);
+	char* directory = malloc(len);
+	char* filename = malloc(len);
+	char* extension = malloc(len);
 
 	memset(stbuf, 0, sizeof(struct stat));
    
@@ -96,7 +95,6 @@ static int cs1550_getattr(const char *path, struct stat *stbuf)
 	
 		res = sscanf(path, "/%[^/]/%[^.].%s", directory, filename, extension);
 		
-		strcat(directPath, directory);
 		
 		if(res == EOF) // Some error occurred when scanning path
 			return -ENOENT;
@@ -104,7 +102,7 @@ static int cs1550_getattr(const char *path, struct stat *stbuf)
 		
 		//Check if name is subdirectory
 		//All files should have extensions, if one is lacking then this is a directory
-		if(strcmp(path, directPath) == 0) // If only the root and directory are given then this must be a directory
+		if(res < 2) 
 		{
 				cs1550_directory_entry *entry = malloc(sizeof(cs1550_directory_entry));
 				FILE *f = fopen(".directories", "rb");
@@ -138,9 +136,8 @@ static int cs1550_getattr(const char *path, struct stat *stbuf)
 				
 			
 		}
-		//Check if name is a regular file
-		//Since an extension is present this must be a file
-		else // Not yet working to detect if given file exists, will work on
+		
+		else // More than directory is present in path, must be a file
 		{
 			
 			FILE *f = fopen(".directories", "rb");
@@ -175,10 +172,25 @@ static int cs1550_getattr(const char *path, struct stat *stbuf)
 			while(i < entry->nFiles && found < 1)
 			{
 				*dirFile = *(entry->files + i);
-				if(strcmp(dirFile->fname, filename) == 0 && strcmp(dirFile->fext, extension) == 0)
-					found = 1;
-				else;
-				i++;
+				if(strcmp(dirFile->fname, filename) == 0)
+				{
+					if(res == 2) // no extension on file
+					{
+						if(strcmp(dirFile->fext, "") == 0)
+							found = 1;
+						else
+							i++;
+					}
+					else // filename and extension present
+					{
+						if(strcmp(dirFile->fext, extension) == 0)
+							found = 1;
+						else
+							i++;
+					}
+				}
+				else
+					i++;
 			}
 			
 			if(found < 1) // file doesn't exist
@@ -189,13 +201,15 @@ static int cs1550_getattr(const char *path, struct stat *stbuf)
 				return -ENOENT;
 			}
 			else;
-			
 			//regular file, probably want to be read and write
 			stbuf->st_mode = S_IFREG | 0666; 
 			stbuf->st_nlink = 1; //file links
-			stbuf->st_size = 0; //file size - make sure you replace with real size!
+			stbuf->st_size = dirFile->fsize; //file size - make sure you replace with real size!
 			res = 0; // no error
 			
+			free(dirFile);
+			free(entry);
+			fclose(f);
 		}
 		
 	
@@ -216,11 +230,11 @@ static int cs1550_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	(void) offset;
 	(void) fi;
 
-	char directory[9];
-	char filename[9];
-	char extension[4];
-	
-	sscanf(path, "/%[^/]/%[^.].%s", directory, filename, extension);
+	int len = strlen(path);
+	char* directory = malloc(len);
+	char* filename = malloc(len);
+	char* extension = malloc(len);
+	int res = sscanf(path, "/%[^/]/%[^.].%s", directory, filename, extension);
 	
 	//This line assumes we have no subdirectories, need to change
 	/*
@@ -270,8 +284,12 @@ static int cs1550_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 			{
 				*dirFile = *(entry->files + i);
 				strcpy(fileName, dirFile->fname);
-				strcat(fileName, ".");
-				strcat(fileName, dirFile->fext);
+				if(strcmp(dirFile->fext, "") != 0) // If file has an extension then include that when giving its name
+				{
+					strcat(fileName, ".");
+					strcat(fileName, dirFile->fext);
+				}
+				else;
 				filler(buf, fileName, NULL, 0);
 				i++;
 			}
@@ -297,33 +315,45 @@ static int cs1550_mkdir(const char *path, mode_t mode)
 	//(void) path;
 	(void) mode;
 	
-	char* directory;
-	char* filename;
-	char* directPath;
-	strcpy(directPath, "/");
+	int len = strlen(path);
+	char* directory = malloc(len);
+	char* filename = malloc(len);
+	char* extension = malloc(len);
 	
 	
 	
-	sscanf(path, "/%[^/]/%s", directory, filename);
+	int res = sscanf(path, "/%[^/]/%[^.].%s", directory, filename, extension);
 	
-	strcat(directPath, directory);
 	//Check to make sure new directory is only under root
 	if(strcmp(path, "/") == 0) // No new directory given
 		 return -EEXIST;
 	
-	else if(strcmp(path, directPath) != 0) // Tried to make a subdirectory under something other than root
+	else if(res > 1) // Tried to make a subdirectory under something other than root
 		return -EPERM;
 	
 	else;
 	{
-		if(strlen(path) > 10) // Directory name max length + the root's '/' + null terminator = 10. If path is longer than this then the name is too long
+		int extensionTest = sscanf(path, "/%[^.].%s", filename, extension);
+		
+		if(extensionTest > 1) // Test to see if user tried to make something with an extension rather than a directory
+			return -EPERM;
+		else 
+		{
+			char* p;
+			p = strchr(path, '.'); // Even if there's no extension directory name might have an invalid '.' in it
+			if(p != NULL)
+				return -EPERM;
+			else;
+		}
+	
+		if(strlen(directory) > 9) 
 			return -ENAMETOOLONG;
 		else
 		{
-			FILE *f = fopen(".directories", "rb");
+			FILE *f = fopen(".directories", "ab+");
 			cs1550_directory_entry *entry = malloc(sizeof(cs1550_directory_entry));
 			int directoryFound = 0;
-			while(fread(entry, sizeof(cs1550_directory_entry), 1, f) > 0 && directoryFound < 1)
+			while(directoryFound < 1 && fread(entry, sizeof(cs1550_directory_entry), 1, f) > 0)
 			{
 				if(strcmp(entry->dname, directory) == 0)
 				{
@@ -331,19 +361,21 @@ static int cs1550_mkdir(const char *path, mode_t mode)
 				}
 				else;
 			}
-			fclose(f);
 			if(directoryFound > 0) // Directory already exists
 			{
+				fclose(f);
 				free(entry);
 				return -EEXIST;
 			}
 			else
 			{
-				FILE *f = fopen(".directories", "ab");
-				cs1550_directory_entry *newDirectory = malloc(sizeof(cs1550_directory_entry));
+				cs1550_directory_entry *newDirectory;
+				newDirectory = malloc(sizeof(cs1550_directory_entry));
 				strcpy(newDirectory->dname, directory);
 				newDirectory->nFiles = 0;
 				fwrite(newDirectory, sizeof(cs1550_directory_entry), 1, f);
+				fclose(f);
+				free(newDirectory);
 			}
 		}
 	}
