@@ -250,53 +250,62 @@ static int cs1550_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	if(strcmp(path, "/") == 0) // need to show all subdirectories
 	{
 		FILE *f = fopen(".directories", "rb");
-		cs1550_directory_entry *entry = malloc(sizeof(cs1550_directory_entry));
-		while(fread(entry, sizeof(cs1550_directory_entry), 1, f) != 0)
-			filler(buf, entry->dname, NULL, 0);
-			
-		free(entry);
-		fclose(f);
+		if(f != NULL)
+		{
+			cs1550_directory_entry *entry = malloc(sizeof(cs1550_directory_entry));
+			while(fread(entry, sizeof(cs1550_directory_entry), 1, f) != 0)
+				filler(buf, entry->dname, NULL, 0);
+			free(entry);
+			fclose(f);
+		}
+		else;	
+		
 	}
 	
 	else // need to show all files within this subdirectory
 	{
 		FILE *f = fopen(".directories", "rb");
-		int directoryFound = 0;
-		cs1550_directory_entry *entry = malloc(sizeof(cs1550_directory_entry));
-		while(directoryFound < 1 && fread(entry, sizeof(cs1550_directory_entry), 1, f) != 0)
-		{	
-			if(strcmp(entry->dname, directory) == 0)
-				directoryFound = 1;
-			else;
-		}
-		if(directoryFound < 1) // If we never found a subdirectory matching the one given return error
+		if(f != NULL)
 		{
-			fclose(f);
-			free(entry);
-			return -ENOENT;
+			int directoryFound = 0;
+			cs1550_directory_entry *entry = malloc(sizeof(cs1550_directory_entry));
+			while(directoryFound < 1 && fread(entry, sizeof(cs1550_directory_entry), 1, f) != 0)
+			{	
+				if(strcmp(entry->dname, directory) == 0)
+					directoryFound = 1;
+				else;
+			}
+			if(directoryFound < 1) // If we never found a subdirectory matching the one given return error
+			{
+				fclose(f);
+				free(entry);
+				return -ENOENT;
+			}
+			else
+			{
+				struct cs1550_file_directory *dirFile = malloc(sizeof(struct cs1550_file_directory));
+				int i = 0;
+				char fileName[20];
+				while(i < entry->nFiles)
+				{
+					*dirFile = *(entry->files + i);
+					strcpy(fileName, dirFile->fname);
+					if(strcmp(dirFile->fext, "") != 0) // If file has an extension then include that when giving its name
+					{
+						strcat(fileName, ".");
+						strcat(fileName, dirFile->fext);
+					}
+					else;
+					filler(buf, fileName, NULL, 0);
+					i++;
+				}
+				free(dirFile);
+				free(entry);
+				fclose(f);
+			}
 		}
 		else
-		{
-			struct cs1550_file_directory *dirFile = malloc(sizeof(struct cs1550_file_directory));
-			int i = 0;
-			char fileName[20];
-			while(i < entry->nFiles)
-			{
-				*dirFile = *(entry->files + i);
-				strcpy(fileName, dirFile->fname);
-				if(strcmp(dirFile->fext, "") != 0) // If file has an extension then include that when giving its name
-				{
-					strcat(fileName, ".");
-					strcat(fileName, dirFile->fext);
-				}
-				else;
-				filler(buf, fileName, NULL, 0);
-				i++;
-			}
-			free(dirFile);
-			free(entry);
-			fclose(f);
-		}
+			return -ENOENT;
 	}
 	/*
 	//add the user stuff (subdirs or files)
@@ -350,9 +359,11 @@ static int cs1550_mkdir(const char *path, mode_t mode)
 			return -ENAMETOOLONG;
 		else
 		{
+			// Since we're opening in append+ we don't need to worry about if .directories doesn't exist
 			FILE *f = fopen(".directories", "ab+");
 			cs1550_directory_entry *entry = malloc(sizeof(cs1550_directory_entry));
 			int directoryFound = 0;
+			
 			while(directoryFound < 1 && fread(entry, sizeof(cs1550_directory_entry), 1, f) > 0)
 			{
 				if(strcmp(entry->dname, directory) == 0)
@@ -361,6 +372,8 @@ static int cs1550_mkdir(const char *path, mode_t mode)
 				}
 				else;
 			}
+
+			
 			if(directoryFound > 0) // Directory already exists
 			{
 				fclose(f);
