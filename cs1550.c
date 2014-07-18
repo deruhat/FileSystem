@@ -17,6 +17,9 @@
 #include <fcntl.h>
 #include <stdlib.h>
 
+#ifndef DEBUGFILE
+#define DEBUGFILE 0
+#endif
 //size of a disk block
 #define	BLOCK_SIZE 512
 
@@ -109,12 +112,13 @@ static int cs1550_getattr(const char *path, struct stat *stbuf)
 				int directoryFound = 0;
 				if(f == NULL)
 				{
+					fclose(f);
 					free(entry);
 					return -ENOENT;
 				}
 				else
 				{
-					while( directoryFound < 1 && fread(entry, sizeof(cs1550_directory_entry), 1, f) > 0)
+					while(directoryFound < 1 && fread(entry, sizeof(cs1550_directory_entry), 1, f) > 0)
 					{
 						if(strcmp(entry->dname, directory) == 0)
 							directoryFound = 1;
@@ -131,10 +135,7 @@ static int cs1550_getattr(const char *path, struct stat *stbuf)
 					else
 						return -ENOENT;
 				}
-			
-				//Might want to return a structure with these fields
-				
-			
+					
 		}
 		
 		else // More than directory is present in path, must be a file
@@ -305,13 +306,11 @@ static int cs1550_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 			}
 		}
 		else
+		{
+			fclose(f);
 			return -ENOENT;
+		}
 	}
-	/*
-	//add the user stuff (subdirs or files)
-	//the +1 skips the leading '/' on the filenames
-	filler(buf, newpath + 1, NULL, 0);
-	*/
 	return 0;
 }
 
@@ -413,6 +412,130 @@ static int cs1550_mknod(const char *path, mode_t mode, dev_t dev)
 {
 	(void) mode;
 	(void) dev;
+	
+	#if DEBUGFILE
+	printf("Beginning mknod\n");
+	#endif
+	int len = strlen(path);
+	char* directory = malloc(len);
+	char* filename = malloc(len);
+	char* extension = malloc(len);
+	int res = sscanf(path, "/%[^/]/%[^.].%s", directory, filename, extension);
+	if(res < 2) // No filename given, tried to create a file in root
+		return -EPERM;
+	else;
+	
+	#if DEBUGFILE
+	printf("Checking if name is too long\n");
+	printf("Directory given was %s\n", directory);
+	printf("Name given was %s\nExtension given was %s\n", filename, extension);
+	printf("Length of filename was %d, length of extension was %d\n", strlen(filename), strlen(extension));
+	#endif
+	
+	if(strlen(filename) > 8) // Filename was over the 8 char limit
+	{
+		#if DEBUGFILE
+		printf("Filename too long\n");
+		#endif
+		return -ENAMETOOLONG;
+	}
+	else if(res > 2 && strlen(extension) > 3) // File name included an extension over the 3 char limit
+	{
+		#if DEBUGFILE
+		printf("Extension too long\n");
+		#endif
+		return -ENAMETOOLONG;
+	}
+	else
+	{
+		
+		#if DEBUGFILE
+		printf("Filename good, opening .directories\n");
+		#endif
+		
+		FILE *f = fopen(".directories", "rb+");
+		if(f == NULL)
+			return -EPERM;
+		else;
+		cs1550_directory_entry *dir = malloc(sizeof(cs1550_directory_entry));
+		struct cs1550_file_directory *dirFile = malloc(sizeof(struct cs1550_file_directory));
+		int i = 0;
+		int found = 0;
+		#if DEBUGFILE
+		printf("Searching for directory to create file in\n");
+		#endif
+		while(found < 1 && fread(dir, sizeof(cs1550_directory_entry), 1, f) != 0)
+		{
+			if(strcmp(dir->dname, directory) == 0)
+				found = 1;
+			else;
+		}
+		
+		found = 0;
+		#if DEBUGFILE
+		printf("Directory found, searching to see if file exists\n");
+		#endif
+		while(found < 1 && i < dir->nFiles)
+		{
+			*dirFile = *(dir->files + i);
+			if(strcmp(dirFile->fname, filename) == 0)
+			{
+				if(res == 2) // no extension on file
+				{
+					if(strcmp(dirFile->fext, "") == 0)
+						found = 1;
+					else
+						i++;
+				}
+				else // filename and extension present
+				{
+					if(strcmp(dirFile->fext, extension) == 0)
+						found = 1;
+					else
+						i++;
+				}
+			}
+			else
+				i++;
+		}
+		
+		if(found > 0)
+		{
+			fclose(f);
+			free(dir);
+			free(dirFile);
+			return -EEXIST;
+		}
+		else;
+		
+		#if DEBUGFILE
+		printf("File does not exist, creating file\n");
+		printf("Directory has %d files, making file in %d index of array\n", dir->nFiles, i);
+		#endif
+		
+		strcpy(dirFile->fname, filename);
+		
+		if(res == 3)
+			strcpy(dirFile->fext, extension);
+		else
+			strcpy(dirFile->fext, "");
+		
+		dirFile->fsize = 0;
+		dirFile->nStartBlock = -1;
+		
+		*(dir->files + i) = *dirFile;
+		dir->nFiles += 1;
+		
+		fseek(f, -sizeof(cs1550_directory_entry), SEEK_CUR);
+		
+		fwrite(dir, sizeof(cs1550_directory_entry), 1, f);
+		
+		fclose(f);
+		free(dir);
+		free(dirFile);
+		return 0;
+	}
+	
 	return 0;
 }
 
@@ -468,6 +591,7 @@ static int cs1550_write(const char *path, const char *buf, size_t size,
 	//write data
 	//set size (should be same as input) and return, or error
 
+	size = 0;
 	return size;
 }
 
