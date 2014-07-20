@@ -605,6 +605,7 @@ static int cs1550_read(const char *path, char *buf, size_t size, off_t offset,
 	int found = 0;
 	cs1550_directory_entry *dir = malloc(sizeof(cs1550_directory_entry));
 	struct cs1550_file_directory *dirFile = malloc(sizeof(struct cs1550_file_directory));
+	long sizeRead = 0;
 	
 	//check to make sure path exists
 	if(res < 2)
@@ -668,7 +669,6 @@ static int cs1550_read(const char *path, char *buf, size_t size, off_t offset,
 	{
 		long nextBlock = dirFile->nStartBlock;
 		int moreBlocks = 1;
-		long sizeRead = 0;
 		long runningOffset = offset;
 		char *toRead;
 		size = dirFile->fsize;
@@ -756,7 +756,7 @@ static int cs1550_read(const char *path, char *buf, size_t size, off_t offset,
 	fclose(directories);
 	fclose(disk);
 	
-	return size;
+	return sizeRead;
 }
 
 // Allocates a new block in the .disk file, returning the block number that has been allocated
@@ -979,13 +979,13 @@ static int cs1550_write(const char *path, const char *buf, size_t size,
 						#endif
 						memcpy((block->data + offset), buf, (MAX_DATA_IN_BLOCK- offset - (size-sizeWritten)));
 						#if DEBUGFILEWRITE
-						printf("Increasing block size by %d\n", size-sizeWritten+1);
+						printf("Increasing block size by %d\n", size-sizeWritten);
 						#endif
-						block->size += size-sizeWritten+1;
+						block->size += size-sizeWritten;
 						#if DEBUGFILEWRITE
-						printf("Increasing size written by %d\n", size-sizeWritten+1);
+						printf("Increasing size written by %d\n", size-sizeWritten);
 						#endif
-						sizeWritten += size-sizeWritten+1;
+						sizeWritten += size-sizeWritten;
 					}
 					else
 					{
@@ -1014,13 +1014,13 @@ static int cs1550_write(const char *path, const char *buf, size_t size,
 						#endif
 						memcpy(block->data, (buf + sizeWritten), (MAX_DATA_IN_BLOCK - (size-sizeWritten)));
 						#if DEBUGFILEWRITE
-						printf("Increasing block size by %d\n", size-sizeWritten+1);
+						printf("Increasing block size by %d\n", size-sizeWritten);
 						#endif
-						block->size += size-sizeWritten+1;
+						block->size += size-sizeWritten;
 						#if DEBUGFILEWRITE
-						printf("Increasing size written by %d\n", size-sizeWritten+1);
+						printf("Increasing size written by %d\n", size-sizeWritten);
 						#endif
-						sizeWritten += size-sizeWritten+1;
+						sizeWritten += size-sizeWritten;
 					}
 					else
 					{
