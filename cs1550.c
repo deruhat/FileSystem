@@ -606,6 +606,7 @@ static int cs1550_read(const char *path, char *buf, size_t size, off_t offset,
 	cs1550_directory_entry *dir = malloc(sizeof(cs1550_directory_entry));
 	struct cs1550_file_directory *dirFile = malloc(sizeof(struct cs1550_file_directory));
 	long sizeRead = 0;
+	long sizePassed = 0;
 	
 	//check to make sure path exists
 	if(res < 2)
@@ -670,7 +671,6 @@ static int cs1550_read(const char *path, char *buf, size_t size, off_t offset,
 		long nextBlock = dirFile->nStartBlock;
 		int moreBlocks = 1;
 		long runningOffset = offset;
-		char *toRead;
 		size = dirFile->fsize;
 		cs1550_disk_block *block = malloc(sizeof(cs1550_disk_block));
 		
@@ -703,8 +703,8 @@ static int cs1550_read(const char *path, char *buf, size_t size, off_t offset,
 					#if DEBUGFILEREAD
 					printf("Reading %d bytes from block\n", block->size);
 					#endif
-					toRead = malloc(block->size - runningOffset);
-					memcpy(toRead, (block->data + runningOffset), (block->size - runningOffset));
+					memcpy((buf + sizeRead), (block->data + runningOffset), block->size - runningOffset);
+					sizeRead += block->size - runningOffset;
 					runningOffset = 0;
 				}
 				else
@@ -716,20 +716,15 @@ static int cs1550_read(const char *path, char *buf, size_t size, off_t offset,
 					#if DEBUGFILEREAD
 					printf("Reading %d bytes from block\n", block->size);
 					#endif
-					toRead = malloc(block->size);
-					memcpy(toRead, block->data, block->size);
+					memcpy((buf + sizeRead), block->data, block->size);
+					sizeRead += block->size;
 				}
-				strcat(buf, toRead);
 				
-				free(toRead);
 			}
-			/*
-			* Regardless of whether we read any data or skipped the block we still add the block's size to our size read
-			* so as to track how far we are into the file according to the size we got from .directories
-			*/
-			sizeRead += block->size;
+		
+			sizePassed += block->size;
 			// If more to read then set the next block and keep reading
-			if(size > sizeRead)
+			if(size > sizePassed)
 			{
 				nextBlock = block->nNextBlock;
 				moreBlocks = 1;
