@@ -22,11 +22,15 @@
 #endif
 
 #ifndef DEBUGFILEWRITE
-#define DEBUGFILEWRITE 1
+#define DEBUGFILEWRITE 0
 #endif
 
 #ifndef DEBUGFILEREAD
-#define DEBUGFILEREAD 1
+#define DEBUGFILEREAD 0
+#endif
+
+#ifndef DEBUGALLOCATE
+#define DEBUGALLOCATE 0
 #endif
 //size of a disk block
 #define	BLOCK_SIZE 512
@@ -39,7 +43,7 @@
 #define	MAX_FILES_IN_DIR (BLOCK_SIZE - (MAX_FILENAME + 1) - sizeof(int)) / \
 	((MAX_FILENAME + 1) + (MAX_EXTENSION + 1) + sizeof(size_t) + sizeof(long))
 
-// 5MB / 512 byte block = 10240 blocks on our disk
+// 5MB / 512 byte block = 10240 blocks on our disk. Use a bit less than that for safety's sake in determining size of disk
 #define BLOCKS_ON_DISK 10240
 	
 //How much data can one block hold?
@@ -607,6 +611,7 @@ static int cs1550_read(const char *path, char *buf, size_t size, off_t offset,
 	struct cs1550_file_directory *dirFile = malloc(sizeof(struct cs1550_file_directory));
 	long sizeRead = 0;
 	long sizePassed = 0;
+	int sizeReturn = 0;;
 	
 	//check to make sure path exists
 	if(res < 2)
@@ -723,15 +728,22 @@ static int cs1550_read(const char *path, char *buf, size_t size, off_t offset,
 			}
 		
 			sizePassed += block->size;
-			// If more to read then set the next block and keep reading
-			if(size > sizePassed)
+			
+			// If more to read and there is another block in the link then keep reading
+			if(size > sizePassed && block->nNextBlock > 0)
 			{
 				nextBlock = block->nNextBlock;
+				#if DEBUGFILEREAD
+				printf("Setting next block to %d\n", nextBlock);
+				#endif
 				moreBlocks = 1;
 			}
-			// If we have read the whole file then we're done the loop
+			// If we have read the whole file or for whatever reason there is no next block linked, then we're done
 			else
 			{
+				#if DEBUGFILEREAD
+				printf("End of file\n");
+				#endif	
 				nextBlock = -1;
 				moreBlocks = 0;
 			}
@@ -780,8 +792,11 @@ static long allocateDisk()
 		printf("Performing non-first allocation\n");
 		#endif
 		blockAllocated = manage->free;
-		if(blockAllocated >= BLOCKS_ON_DISK)
+		if(blockAllocated >= BLOCKS_ON_DISK - 1)
 		{
+			#if DEBUGALLOCATE
+			printf("NO MORE SPACE FOR ALLOCATION\n");
+			#endif
 			blockAllocated = -1;
 		}
 		else
@@ -915,6 +930,7 @@ static int cs1550_write(const char *path, const char *buf, size_t size,
 		long nextBlock = dirFile->nStartBlock;
 		int moreBlocks = 1;
 		long runningOffset = offset;
+		int writtenToBlock = 0; // amount of bytes written to a given block
 		cs1550_disk_block *block = malloc(sizeof(cs1550_disk_block));
 		
 		#if DEBUGFILE
@@ -957,6 +973,7 @@ static int cs1550_write(const char *path, const char *buf, size_t size,
 				#if DEBUGFILEWRITE
 				printf("Have not yet reached offset\n");
 				#endif
+				nextBlock = block->nNextBlock;
 				runningOffset -= MAX_DATA_IN_BLOCK; // If our offset does not start in this block then we just go to the next block
 			}
 			else
@@ -966,32 +983,32 @@ static int cs1550_write(const char *path, const char *buf, size_t size,
 					#if DEBUGFILEWRITE
 					printf("Writing to offset block\n");
 					#endif
-					if((size - sizeWritten) < MAX_DATA_IN_BLOCK)
+					if((size - sizeWritten + runningOffset) < MAX_DATA_IN_BLOCK)
 					{
+						writtenToBlock = size - sizeWritten + runningOffset;
 						#if DEBUGFILEWRITE
 						printf("Writing less than full block\nMallocing space for writing\n");
 						printf("Using memcpy to move information from buffer to block data\n");
 						#endif
-						memcpy((block->data + offset), buf, (MAX_DATA_IN_BLOCK- offset - (size-sizeWritten)));
-						#if DEBUGFILEWRITE
-						printf("Increasing block size by %d\n", size-sizeWritten);
-						#endif
-						block->size += size-sizeWritten;
+						memcpy((block->data + runningOffset), (buf + sizeWritten), (size - sizeWritten));
+						if(block->size < writtenToBlock) // If we appended anything to the block then we need to change block size.
+							block->size = writtenToBlock;
+						else;
 						#if DEBUGFILEWRITE
 						printf("Increasing size written by %d\n", size-sizeWritten);
 						#endif
-						sizeWritten += size-sizeWritten;
+						sizeWritten += size - sizeWritten;
 					}
 					else
 					{
 						#if DEBUGFILEWRITE
-						printf("Writing full block from offset\n");
+						printf("Writing rest of block from offset of %d\n", runningOffset);
 						#endif
 						memcpy((block->data + runningOffset), (buf + sizeWritten), (MAX_DATA_IN_BLOCK-runningOffset));
 						#if DEBUGFILEWRITE
 						printf("Increasing block size and sizeWritten\n");
 						#endif
-						block->size += MAX_DATA_IN_BLOCK - runningOffset;
+						block->size = MAX_DATA_IN_BLOCK;
 						sizeWritten += MAX_DATA_IN_BLOCK - runningOffset;
 					}
 					runningOffset = 0;	
@@ -1003,19 +1020,19 @@ static int cs1550_write(const char *path, const char *buf, size_t size,
 					#endif
 					if((size - sizeWritten) < MAX_DATA_IN_BLOCK)
 					{
+						writtenToBlock = size - sizeWritten;
 						#if DEBUGFILEWRITE
 						printf("Writing less than full block\n");
 						printf("Using memcpy to move information from buffer to block data\n");
 						#endif
-						memcpy(block->data, (buf + sizeWritten), (MAX_DATA_IN_BLOCK - (size-sizeWritten)));
-						#if DEBUGFILEWRITE
-						printf("Increasing block size by %d\n", size-sizeWritten);
-						#endif
-						block->size += size-sizeWritten;
+						memcpy(block->data, (buf + sizeWritten), writtenToBlock);
+						if(block->size < writtenToBlock) // If we appended anything to the block then we need to change block size.
+							block->size = writtenToBlock;
+						else;
 						#if DEBUGFILEWRITE
 						printf("Increasing size written by %d\n", size-sizeWritten);
 						#endif
-						sizeWritten += size-sizeWritten;
+						sizeWritten += size - sizeWritten;
 					}
 					else
 					{
@@ -1027,10 +1044,14 @@ static int cs1550_write(const char *path, const char *buf, size_t size,
 						#if DEBUGFILEWRITE
 						printf("Increasing block size and sizeWritten\n");
 						#endif
-						block->size += MAX_DATA_IN_BLOCK;
+						block->size = MAX_DATA_IN_BLOCK;
 						sizeWritten += MAX_DATA_IN_BLOCK;
 					}
 				}
+				
+				#if DEBUGFILEWRITE
+				printf("Finished writing block, block size is now %d\n", block->size);
+				#endif
 				
 				if(sizeWritten >= size) // If we've written all that was requested we're done
 				{
@@ -1062,7 +1083,7 @@ static int cs1550_write(const char *path, const char *buf, size_t size,
 					#endif
 					if(block->nNextBlock < 0)
 					{
-						#if DEBUGFILEWRITE
+						#if DEBUGFILEALLOCATE
 						printf("No more space for allocation\n");
 						#endif
 						moreBlocks = 0; // Out of space on disk, no more writes
@@ -1083,7 +1104,9 @@ static int cs1550_write(const char *path, const char *buf, size_t size,
 		}
 		free(block);
 	}
-	dirFile->fsize += sizeWritten;
+	if(dirFile->fsize < offset + sizeWritten) // size of file only changes if we wrote past the old end of file
+		dirFile->fsize = offset + sizeWritten;
+	else;
 	*(dir->files + i) = *dirFile;
 	fseek(directories, -sizeof(cs1550_directory_entry), SEEK_CUR);
 	fwrite(dir, sizeof(cs1550_directory_entry), 1, directories);
