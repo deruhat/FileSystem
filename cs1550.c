@@ -20,6 +20,14 @@
 #ifndef DEBUGFILE
 #define DEBUGFILE 0
 #endif
+
+#ifndef DEBUGFILEWRITE
+#define DEBUGFILEWRITE 1
+#endif
+
+#ifndef DEBUGFILEREAD
+#define DEBUGFILEREAD 1
+#endif
 //size of a disk block
 #define	BLOCK_SIZE 512
 
@@ -31,8 +39,23 @@
 #define	MAX_FILES_IN_DIR (BLOCK_SIZE - (MAX_FILENAME + 1) - sizeof(int)) / \
 	((MAX_FILENAME + 1) + (MAX_EXTENSION + 1) + sizeof(size_t) + sizeof(long))
 
+// 5MB / 512 byte block = 10240 blocks on our disk
+#define BLOCKS_ON_DISK 10240
+	
 //How much data can one block hold?
 #define	MAX_DATA_IN_BLOCK (BLOCK_SIZE - sizeof(size_t) - sizeof(long))
+
+#define DISK_MANAGEMENT_FILLER (BLOCK_SIZE - 2*sizeof(int) - sizeof(long))
+
+struct cs1550_disk_management
+{
+	int prevAllocations;	// Marks whether any allocations have been made: 0 if not, 1 is so
+	long free;			// First block that is free
+		
+	char filler[DISK_MANAGEMENT_FILLER]; // rest of the block is just an empty array to ensure that this struct is 1 block
+};
+
+typedef struct cs1550_disk_management cs1550_disk_management;
 
 struct cs1550_directory_entry
 {
@@ -56,9 +79,8 @@ struct cs1550_disk_block
 	//Two choices for interpreting size: 
 	//	1) how many bytes are being used in this block
 	//	2) how many bytes are left in the file
-	//Either way, size tells us if we need to chase the pointer to the next
-	//disk block. Use it however you want.
-	size_t size;	
+	
+	size_t size; // Stores how many bytes are used in this block
 
 	//The next disk block, if needed. This is the next pointer in the linked 
 	//allocation list
@@ -86,7 +108,11 @@ static int cs1550_getattr(const char *path, struct stat *stbuf)
 	char* extension = malloc(len);
 
 	memset(stbuf, 0, sizeof(struct stat));
-   
+	
+	#if DEBUGFILE
+	printf("Beginning getattr\n");
+	#endif
+	
 	//is path the root dir?
 	if (strcmp(path, "/") == 0) {
 		stbuf->st_mode = S_IFDIR | 0755;
@@ -95,7 +121,9 @@ static int cs1550_getattr(const char *path, struct stat *stbuf)
 	
 	else 
 	{
-	
+		#if DEBUGFILE
+		printf("Scanning path\n");
+		#endif
 		res = sscanf(path, "/%[^/]/%[^.].%s", directory, filename, extension);
 		
 		
@@ -108,16 +136,24 @@ static int cs1550_getattr(const char *path, struct stat *stbuf)
 		if(res < 2) 
 		{
 				cs1550_directory_entry *entry = malloc(sizeof(cs1550_directory_entry));
+				#if DEBUGFILE
+				printf("Opening file .directories\n");
+				#endif
 				FILE *f = fopen(".directories", "rb");
 				int directoryFound = 0;
 				if(f == NULL)
 				{
-					fclose(f);
+					#if DEBUGFILE
+					printf(".directories does not exist, returning -ENOENT\n");
+					#endif
 					free(entry);
 					return -ENOENT;
 				}
 				else
 				{
+					#if DEBUGFILE
+					printf(".directories exists, searching for directory\n");
+					#endif
 					while(directoryFound < 1 && fread(entry, sizeof(cs1550_directory_entry), 1, f) > 0)
 					{
 						if(strcmp(entry->dname, directory) == 0)
@@ -257,7 +293,6 @@ static int cs1550_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 			while(fread(entry, sizeof(cs1550_directory_entry), 1, f) != 0)
 				filler(buf, entry->dname, NULL, 0);
 			free(entry);
-			fclose(f);
 		}
 		else;	
 		
@@ -557,20 +592,215 @@ static int cs1550_read(const char *path, char *buf, size_t size, off_t offset,
 			  struct fuse_file_info *fi)
 {
 	(void) buf;
-	(void) offset;
+	//(void) offset;
 	(void) fi;
-	(void) path;
-
+	//(void) path;
+	
+	int len = strlen(path);
+	char* directory = malloc(len);
+	char* filename = malloc(len);
+	char* extension = malloc(len);
+	int res = sscanf(path, "/%[^/]/%[^.].%s", directory, filename, extension);
+	int i = 0;
+	int found = 0;
+	cs1550_directory_entry *dir = malloc(sizeof(cs1550_directory_entry));
+	struct cs1550_file_directory *dirFile = malloc(sizeof(struct cs1550_file_directory));
+	
 	//check to make sure path exists
+	if(res < 2)
+	{
+		free(directory);
+		free(filename);
+		free(extension);
+		return -EISDIR;
+	}
+	else;
+	
+	FILE *directories = fopen(".directories", "rb");
+	FILE *disk = fopen(".disk", "rb");
+	
+	if(directories == NULL || disk == NULL)
+	{
+		free(directory);
+		free(filename);
+		free(extension);
+		free(dir);
+		free(dirFile);
+	}
+	else;
+	
+	while(found < 1 && fread(dir, sizeof(cs1550_directory_entry), 1, directories) != 0)
+	{
+		if(strcmp(dir->dname, directory) == 0)
+			found = 1;
+		else;
+	}
+	
+	found = 0;
+	while(found < 1 && i < dir->nFiles)
+	{
+		*dirFile = *(dir->files + i);
+		if(strcmp(dirFile->fname, filename) == 0)
+		{
+			if(res == 2) // no extension on file
+			{
+				if(strcmp(dirFile->fext, "") == 0)
+					found = 1;
+				else
+					i++;
+			}
+			else // filename and extension present
+			{
+				if(strcmp(dirFile->fext, extension) == 0)
+					found = 1;
+				else
+					i++;
+			}
+		}
+		else
+			i++;
+	}
 	//check that size is > 0
 	//check that offset is <= to the file size
-	//read in data
-	//set size and return, or error
-
-	size = 0;
+	if(offset > dirFile->fsize)
+		size = 0;
+	else
+	{
+		long nextBlock = dirFile->nStartBlock;
+		int moreBlocks = 1;
+		long sizeRead = 0;
+		long runningOffset = offset;
+		char *toRead;
+		size = dirFile->fsize;
+		cs1550_disk_block *block = malloc(sizeof(cs1550_disk_block));
+		
+		//read in data
+		#if DEBUGFILEREAD
+		printf("Beginning read loop\n");
+		#endif
+		while(moreBlocks == 1)
+		{
+			#if DEBUGFILEREAD
+			printf("Seeking to block\n");
+			#endif
+			fseek(disk, nextBlock * BLOCK_SIZE, SEEK_SET);
+			fread(block, sizeof(cs1550_disk_block), 1, disk);
+			if(runningOffset > MAX_DATA_IN_BLOCK)
+			{
+				#if DEBUGFILEREAD
+				printf("Not yet at offset\n");
+				#endif
+				runningOffset -= MAX_DATA_IN_BLOCK; // If our offset does not start in this block then we just go to the next block
+			}
+			else
+			{
+				if(runningOffset > 0)
+				{	
+					#if DEBUGFILEREAD
+					printf("Reading offset block\n");
+					#endif
+					// If we're at the block for offset then only read from there, and after that just read the entirety of any full block
+					#if DEBUGFILEREAD
+					printf("Reading %d bytes from block\n", block->size);
+					#endif
+					toRead = malloc(block->size - runningOffset);
+					memcpy(toRead, (block->data + runningOffset), (block->size - runningOffset));
+					runningOffset = 0;
+				}
+				else
+				{
+					#if DEBUGFILEREAD
+					printf("Reading non-offset block\n");
+					#endif
+					// If no offset, or if we already read past the offset and are in a new block, then we just read whole blocks
+					#if DEBUGFILEREAD
+					printf("Reading %d bytes from block\n", block->size);
+					#endif
+					toRead = malloc(block->size);
+					memcpy(toRead, block->data, block->size);
+				}
+				strcat(buf, toRead);
+				
+				free(toRead);
+			}
+			/*
+			* Regardless of whether we read any data or skipped the block we still add the block's size to our size read
+			* so as to track how far we are into the file according to the size we got from .directories
+			*/
+			sizeRead += block->size;
+			// If more to read then set the next block and keep reading
+			if(size > sizeRead)
+			{
+				nextBlock = block->nNextBlock;
+				moreBlocks = 1;
+			}
+			// If we have read the whole file then we're done the loop
+			else
+			{
+				nextBlock = -1;
+				moreBlocks = 0;
+			}
+			
+		}
+		free(block);
 	
-
+	}
+	
+	
+	
+	free(directory);
+	free(filename);
+	free(extension);
+	free(dir);
+	free(dirFile);
+	fclose(directories);
+	fclose(disk);
+	
 	return size;
+}
+
+// Allocates a new block in the .disk file, returning the block number that has been allocated
+static long allocateDisk()
+{
+	#if DEBUGFILE
+	printf("Beginning allocateDisk()\n");
+	#endif
+	FILE *f = fopen(".disk", "rb+");
+	cs1550_disk_management *manage = malloc(sizeof(cs1550_disk_management));
+	long blockAllocated;
+	fread(manage, sizeof(cs1550_disk_management), 1, f);
+	
+	if(manage->prevAllocations == 0)
+	{
+		#if DEBUGFILE
+		printf("Performing first allocation\n");
+		#endif
+		manage->prevAllocations = 1;
+		manage->free = 2; // 0th block is for disk management struct, so we need to allocate the first block
+		blockAllocated = 1;
+	}
+	else
+	{
+		#if DEBUGFILE
+		printf("Performing non-first allocation\n");
+		#endif
+		blockAllocated = manage->free;
+		if(blockAllocated >= BLOCKS_ON_DISK)
+		{
+			blockAllocated = -1;
+		}
+		else
+		{
+			manage->free++;
+		}
+	}
+	fseek(f, -sizeof(cs1550_disk_management), SEEK_CUR);
+	fwrite(manage, sizeof(cs1550_disk_management), 1, f);
+	fclose(f);
+	#if DEBUGFILE
+	printf("allocateDisk() has finished, returning\n");
+	#endif
+	return blockAllocated;
 }
 
 /* 
@@ -586,14 +816,298 @@ static int cs1550_write(const char *path, const char *buf, size_t size,
 	(void) path;
 
 	//check to make sure path exists
+	
+	int len = strlen(path);
+	char* directory = malloc(len);
+	char* filename = malloc(len);
+	char* extension = malloc(len);
+	int res = sscanf(path, "/%[^/]/%[^.].%s", directory, filename, extension);
+	int i = 0;
+	int found = 0;
+	long sizeWritten = 0;
+	cs1550_directory_entry *dir = malloc(sizeof(cs1550_directory_entry));
+	struct cs1550_file_directory *dirFile = malloc(sizeof(struct cs1550_file_directory));
+	
+	#if DEBUGFILE
+	printf("Beginning write\n");
+	#endif
+	
+	if(res < 2)
+	{
+		free(directory);
+		free(filename);
+		free(extension);
+		return 0;
+	}
+	else;
+	
+	#if DEBUGFILE
+	printf("Opening files\n");
+	#endif
+	FILE *directories = fopen(".directories", "rb+");
+	FILE *disk = fopen(".disk", "rb+");
+	
+	if(directories == NULL || disk == NULL)
+	{
+		#if DEBUGFILE
+		printf(".directories or .disk does not seem to exist, exiting\n");
+		#endif
+		free(directory);
+		free(filename);
+		free(extension);
+		free(dir);
+		free(dirFile);
+		return 0;
+	}
+	else;
+	
+	#if DEBUGFILE
+	printf("Searching for directory\n");
+	#endif
+	while(found < 1 && fread(dir, sizeof(cs1550_directory_entry), 1, directories) != 0)
+	{
+		if(strcmp(dir->dname, directory) == 0)
+			found = 1;
+		else;
+	}
+	
+	found = 0;
+	#if DEBUGFILE
+	printf("Searching for file\n");
+	#endif
+	while(found < 1 && i < dir->nFiles)
+	{
+		*dirFile = *(dir->files + i);
+		if(strcmp(dirFile->fname, filename) == 0)
+		{
+			if(res == 2) // no extension on file
+			{
+				if(strcmp(dirFile->fext, "") == 0)
+					found = 1;
+				else
+					i++;
+			}
+			else // filename and extension present
+			{
+				if(strcmp(dirFile->fext, extension) == 0)
+					found = 1;
+				else
+					i++;
+			}
+		}
+		else
+			i++;
+	}
 	//check that size is > 0
 	//check that offset is <= to the file size
+	#if DEBUGFILE
+	printf("Checking to ensure offset is within file size\n");
+	#endif
+	if(offset > dirFile->fsize)
+	{
+		free(directory);
+		free(filename);
+		free(extension);
+		free(dir);
+		free(dirFile);
+		fclose(directories);
+		fclose(disk);
+		return -EFBIG;
+	}
 	//write data
+	else
+	{
+		long nextBlock = dirFile->nStartBlock;
+		int moreBlocks = 1;
+		long runningOffset = offset;
+		cs1550_disk_block *block = malloc(sizeof(cs1550_disk_block));
+		
+		#if DEBUGFILE
+		printf("Checking to see if file needs to be created on disk/n");
+		#endif
+	
+		if(dirFile->nStartBlock == -1)
+		{
+			#if DEBUGFILE
+			printf("Allocating initial disk space for file\n");
+			#endif
+			fclose(disk);
+			dirFile->nStartBlock = allocateDisk();
+			disk = fopen(".disk", "rb+");
+			#if DEBUGFILEWRITE
+			printf("Allocated block at %ld\n", dirFile->nStartBlock);
+			#endif
+			if(dirFile->nStartBlock < 0)
+			{
+				moreBlocks = 0; // No more space on disk, no writes shall occur
+			}
+			else;
+		}
+		else;
+		
+		nextBlock = dirFile->nStartBlock;
+		//write data
+		#if DEBUGFILE
+		printf("Beginning write loop\n");
+		#endif
+		while(moreBlocks == 1)
+		{
+			#if DEBUGFILEWRITE
+			printf("Seeking to block\n");
+			#endif
+			fseek(disk, BLOCK_SIZE * nextBlock, SEEK_SET);
+			fread(block, sizeof(cs1550_disk_block), 1, disk);
+			if(runningOffset > MAX_DATA_IN_BLOCK)
+			{
+				#if DEBUGFILEWRITE
+				printf("Have not yet reached offset\n");
+				#endif
+				runningOffset -= MAX_DATA_IN_BLOCK; // If our offset does not start in this block then we just go to the next block
+			}
+			else
+			{
+				if(runningOffset > 0)
+				{	
+					#if DEBUGFILEWRITE
+					printf("Writing to offset block\n");
+					#endif
+					if((size - sizeWritten) < MAX_DATA_IN_BLOCK)
+					{
+						#if DEBUGFILEWRITE
+						printf("Writing less than full block\nMallocing space for writing\n");
+						printf("Using memcpy to move information from buffer to block data\n");
+						#endif
+						memcpy((block->data + offset), buf, (MAX_DATA_IN_BLOCK- offset - (size-sizeWritten)));
+						#if DEBUGFILEWRITE
+						printf("Increasing block size by %d\n", size-sizeWritten+1);
+						#endif
+						block->size += size-sizeWritten+1;
+						#if DEBUGFILEWRITE
+						printf("Increasing size written by %d\n", size-sizeWritten+1);
+						#endif
+						sizeWritten += size-sizeWritten+1;
+					}
+					else
+					{
+						#if DEBUGFILEWRITE
+						printf("Writing full block from offset\n");
+						#endif
+						memcpy((block->data + runningOffset), (buf + sizeWritten), (MAX_DATA_IN_BLOCK-runningOffset));
+						#if DEBUGFILEWRITE
+						printf("Increasing block size and sizeWritten\n");
+						#endif
+						block->size += MAX_DATA_IN_BLOCK - runningOffset;
+						sizeWritten += MAX_DATA_IN_BLOCK - runningOffset;
+					}
+					runningOffset = 0;	
+				}
+				else
+				{
+					#if DEBUGFILEWRITE
+					printf("Writing to non-offset block\n");
+					#endif
+					if((size - sizeWritten) < MAX_DATA_IN_BLOCK)
+					{
+						#if DEBUGFILEWRITE
+						printf("Writing less than full block\n");
+						printf("Using memcpy to move information from buffer to block data\n");
+						#endif
+						memcpy(block->data, (buf + sizeWritten), (MAX_DATA_IN_BLOCK - (size-sizeWritten)));
+						#if DEBUGFILEWRITE
+						printf("Increasing block size by %d\n", size-sizeWritten+1);
+						#endif
+						block->size += size-sizeWritten+1;
+						#if DEBUGFILEWRITE
+						printf("Increasing size written by %d\n", size-sizeWritten+1);
+						#endif
+						sizeWritten += size-sizeWritten+1;
+					}
+					else
+					{
+						#if DEBUGFILEWRITE
+						printf("Writing full block data from buffer\n");
+						#endif
+						memcpy(block->data, (buf + sizeWritten), MAX_DATA_IN_BLOCK);
+						
+						#if DEBUGFILEWRITE
+						printf("Increasing block size and sizeWritten\n");
+						#endif
+						block->size += MAX_DATA_IN_BLOCK;
+						sizeWritten += MAX_DATA_IN_BLOCK;
+					}
+				}
+				
+				if(sizeWritten >= size) // If we've written all that was requested we're done
+				{
+					#if DEBUGFILEWRITE
+					printf("Written requested amount, loop ending\n");
+					#endif
+					moreBlocks = 0;
+					nextBlock = -1;
+				}
+				else
+				{
+					#if DEBUGFILEWRITE
+					printf("More to write, setting next block\n");
+					#endif
+					moreBlocks = 1;
+					if(block->nNextBlock == 0) // need to allocate new space
+					{
+						#if DEBUGFILEWRITE
+						printf("No next block detected, allocating new space\n");
+						#endif
+						fclose(disk);
+						disk = fopen(".disk", "rb+");
+						fseek(disk, BLOCK_SIZE * (nextBlock + 1), SEEK_SET);
+						block->nNextBlock = allocateDisk();
+					}
+					else;
+					#if DEBUGFILEWRITE
+					printf("Next block has been set as %ld\n", block->nNextBlock);
+					#endif
+					if(block->nNextBlock < 0)
+					{
+						#if DEBUGFILEWRITE
+						printf("No more space for allocation\n");
+						#endif
+						moreBlocks = 0; // Out of space on disk, no more writes
+					}
+					else
+						nextBlock = block->nNextBlock;
+				}
+				
+				#if DEBUGFILEWRITE
+				printf("Seeking backwards to write block\n");
+				#endif
+				fseek(disk, -sizeof(cs1550_disk_block), SEEK_CUR);
+				#if DEBUGFILEWRITE
+				printf("Writing block\n");
+				#endif
+				fwrite(block, sizeof(cs1550_disk_block), 1, disk);
+			}
+		}
+		free(block);
+	}
+	dirFile->fsize += sizeWritten;
+	*(dir->files + i) = *dirFile;
+	fseek(directories, -sizeof(cs1550_directory_entry), SEEK_CUR);
+	fwrite(dir, sizeof(cs1550_directory_entry), 1, directories);
+	
+	free(directory);
+	free(filename);
+	free(extension);
+	free(dir);
+	free(dirFile);
+	fclose(directories);
+	fclose(disk);
+	
 	//set size (should be same as input) and return, or error
-
-	size = 0;
-	return size;
+	if(sizeWritten < size)
+		return sizeWritten;
+	else
+		return size;
 }
+
 
 /******************************************************************************
  *
