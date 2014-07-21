@@ -26,7 +26,7 @@
 #endif
 
 #ifndef DEBUGFILEREAD
-#define DEBUGFILEREAD 0
+#define DEBUGFILEREAD 1
 #endif
 
 #ifndef DEBUGALLOCATE
@@ -611,7 +611,11 @@ static int cs1550_read(const char *path, char *buf, size_t size, off_t offset,
 	struct cs1550_file_directory *dirFile = malloc(sizeof(struct cs1550_file_directory));
 	long sizeRead = 0;
 	long sizePassed = 0;
-	int sizeReturn = 0;;
+	int sizeReturn = 0;
+	
+	#if DEBUGFILEREAD
+	printf("Size to read is %d\n", size);
+	#endif
 	
 	//check to make sure path exists
 	if(res < 2)
@@ -669,14 +673,13 @@ static int cs1550_read(const char *path, char *buf, size_t size, off_t offset,
 	}
 	//check that size is > 0
 	//check that offset is <= to the file size
-	if(offset > dirFile->fsize)
-		size = 0;
-	else
+	if(offset <= dirFile->fsize && size > 0)
 	{
 		long nextBlock = dirFile->nStartBlock;
 		int moreBlocks = 1;
 		long runningOffset = offset;
-		size = dirFile->fsize;
+		long fsize = dirFile->fsize;
+		int blockSizeToRead;
 		cs1550_disk_block *block = malloc(sizeof(cs1550_disk_block));
 		
 		//read in data
@@ -701,28 +704,54 @@ static int cs1550_read(const char *path, char *buf, size_t size, off_t offset,
 			{
 				if(runningOffset > 0)
 				{	
+					blockSizeToRead = size - sizeRead;
 					#if DEBUGFILEREAD
 					printf("Reading offset block\n");
 					#endif
 					// If we're at the block for offset then only read from there, and after that just read the entirety of any full block
-					#if DEBUGFILEREAD
-					printf("Reading %d bytes from block\n", block->size);
-					#endif
-					memcpy((buf + sizeRead), (block->data + runningOffset), block->size - runningOffset);
-					sizeRead += block->size - runningOffset;
+					
+					if(blockSizeToRead + runningOffset < block->size) // If we want to read less than all of the block's data
+					{
+						#if DEBUGFILEREAD
+						printf("Reading %d blocks from file, reaching count\n", blockSizeToRead);
+						#endif
+						memcpy((buf + sizeRead), (block->data + runningOffset), (blockSizeToRead));
+						sizeRead += blockSizeToRead;
+					}
+					else
+					{
+						#if DEBUGFILEREAD
+						printf("Reading %d bytes from block\n", block->size);
+						#endif
+						memcpy((buf + sizeRead), (block->data + runningOffset), block->size - runningOffset);
+						sizeRead += block->size - runningOffset;
+					}
 					runningOffset = 0;
 				}
 				else
 				{
+					blockSizeToRead = size - sizeRead;
 					#if DEBUGFILEREAD
 					printf("Reading non-offset block\n");
 					#endif
 					// If no offset, or if we already read past the offset and are in a new block, then we just read whole blocks
-					#if DEBUGFILEREAD
-					printf("Reading %d bytes from block\n", block->size);
-					#endif
-					memcpy((buf + sizeRead), block->data, block->size);
-					sizeRead += block->size;
+					
+					if(blockSizeToRead < block->size) // If we want to read less than all of the block's data
+					{
+						#if DEBUGFILEREAD
+						printf("Reading %d blocks from file, reaching count\n", blockSizeToRead);
+						#endif
+						memcpy((buf + sizeRead), block->data, blockSizeToRead);
+						sizeRead += blockSizeToRead;
+					}
+					else
+					{
+						#if DEBUGFILEREAD
+						printf("Reading %d bytes from block\n", block->size);
+						#endif
+						memcpy((buf + sizeRead), block->data, block->size);
+						sizeRead += block->size;
+					}
 				}
 				
 			}
@@ -730,7 +759,7 @@ static int cs1550_read(const char *path, char *buf, size_t size, off_t offset,
 			sizePassed += block->size;
 			
 			// If more to read and there is another block in the link then keep reading
-			if(size > sizePassed && block->nNextBlock > 0)
+			if(size > sizeRead && block->nNextBlock > 0)
 			{
 				nextBlock = block->nNextBlock;
 				#if DEBUGFILEREAD
@@ -752,6 +781,7 @@ static int cs1550_read(const char *path, char *buf, size_t size, off_t offset,
 		free(block);
 	
 	}
+	else;
 	
 	
 	
