@@ -393,7 +393,7 @@ static int cs1550_mkdir(const char *path, mode_t mode)
 			else;
 		}
 	
-		if(strlen(directory) > 9) 
+		if(strlen(directory) >= 9) 
 			return -ENAMETOOLONG;
 		else
 		{
@@ -1054,6 +1054,7 @@ static int cs1550_write(const char *path, const char *buf, size_t size,
 						#if DEBUGFILEWRITE
 						printf("Writing less than full block\n");
 						printf("Using memcpy to move information from buffer to block data\n");
+						printf("Writing %d bytes\n", writtenToBlock);
 						#endif
 						memcpy(block->data, (buf + sizeWritten), writtenToBlock);
 						if(block->size < writtenToBlock) // If we appended anything to the block then we need to change block size.
