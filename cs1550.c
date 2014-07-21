@@ -26,7 +26,7 @@
 #endif
 
 #ifndef DEBUGFILEREAD
-#define DEBUGFILEREAD 1
+#define DEBUGFILEREAD 0
 #endif
 
 #ifndef DEBUGALLOCATE
